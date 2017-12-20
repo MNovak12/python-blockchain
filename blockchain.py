@@ -4,6 +4,7 @@ from time import time
 from urllib.parse import urlparse
 from uuid import uuid4
 
+import requests
 from flask import Flask, jsonify
 from flask import request
 
@@ -61,6 +62,29 @@ class Blockchain(object):
 
         return True
 
+    def resolve_conflicts(self):
+        # the longest chain is the correct one
+        max_len = len(self.chain)
+        new_chain = None
+
+        for node in self.nodes:
+            response = requests.get(f'http://{node}/chain')
+
+            if response.status_code == 200:
+                length = response.json()['length']
+                chain = response.json()['chain']
+
+                if length > max_len:
+                    max_len = length
+                    new_chain = chain
+
+        # replace our chain with the longer one if it exists
+        if new_chain:
+            self.chain = new_chain
+            return True
+
+        return False
+
     def new_transaction(self, sender, recipient, amount):
         # Adds a new transaction to the list of transactions
         self.current_transactions.append({
@@ -110,7 +134,7 @@ class Blockchain(object):
 
         guess = f'{last_proof}{proof}'.encode()
         guess_hash = hashlib.sha256(guess).hexdigest()
-        return guess_hash[:4] == "0000"
+        return guess_hash[:4] == '0000'
 
 
 # Instantiate our Node
@@ -131,7 +155,7 @@ def mine():
 
     # reward with a new coin
     blockchain.new_transaction(
-        sender="0",
+        sender='0',
         recipient=node_identifier,
         amount=1
     )
@@ -139,7 +163,7 @@ def mine():
     # add a new block with previous unverified transactions and transaction containing reward coin
     previous_hash = blockchain.hash(last_block)
     response = blockchain.new_block(proof, previous_hash)
-    response['message'] = "New block added"
+    response['message'] = 'New block added'
     return jsonify(response), 200
 
 
@@ -150,7 +174,7 @@ def new_transaction():
     required = ['sender', 'recipient', 'amount']
     for value in required:
         if not value in values:
-            return "Missing " + value
+            return 'Missing ' + value
 
     index = blockchain.new_transaction(values['sender'], values['recipient'], values['amount'])
     response = {'message': f'Transaction will be added to Block {index}'}
@@ -166,5 +190,40 @@ def full_chain():
     return jsonify(response), 200
 
 
+@app.route('/nodes/register', methods=['POST'])
+def register_nodes():
+    values = request.get_json()
+
+    nodes = values.get('nodes')
+
+    if not nodes:
+        return 'Error: Please supply a valid list of nodes', 400
+
+    for node in nodes:
+        blockchain.register_node(node)
+
+    response = {
+        'message': 'New nodes have been added',
+        'total_nodes': len(nodes)
+    }
+
+    return jsonify(response), 201
+
+@app.route('/nodes/resolve', methods=['GET'])
+def consensus():
+    replaced = blockchain.resolve_conflicts()
+
+    if replaced:
+        response = {
+            'message': 'Our blockchain was replaced',
+            'new_blockchain': blockchain.chain
+        }
+    else:
+        response = {
+            'message': 'Our blockchain was correct',
+            'blockchain': blockchain.chain
+        }
+    return jsonify(response), 200
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=5001)
